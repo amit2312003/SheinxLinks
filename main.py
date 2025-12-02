@@ -9,7 +9,6 @@ from bs4 import BeautifulSoup
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
-from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -24,17 +23,18 @@ def home():
     return "I am alive! Bot is running."
 
 def run_web_server():
-    # Render assigns a PORT env variable, default to 10000 if missing
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
 
 # ==========================================
 # PART 2: BOT CONFIGURATION
 # ==========================================
-TELEGRAM_BOT_TOKEN = "8297796693:AAHuho4cbyVNnCWwFZUQsna8RWcqor6mQZQ"
-TELEGRAM_GROUP_ID = "-1003489527370"
+# Use Environment Variables for safety, or fallback to hardcoded
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8297796693:AAHuho4cbyVNnCWwFZUQsna8RWcqor6mQZQ")
+TELEGRAM_GROUP_ID = os.environ.get("TELEGRAM_GROUP", "-1003489527370")
+
 TARGET_URL = "https://www.sheinindia.in/c/sverse-5939-37961"
-CHECK_INTERVAL = 10     # Slower interval to save RAM on Render Free Tier
+CHECK_INTERVAL = 10 
 SCROLL_DEPTH = 2
 SEEN_FILE = "seen.json"
 
@@ -73,16 +73,20 @@ def send_alert(item):
     payload['text'] = caption
     requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", data=payload, timeout=10)
 
-# ================= DRIVER SETUP =================
+# ================= DRIVER SETUP (UPDATED FOR SYSTEM CHROMIUM) =================
 def get_driver():
     options = webdriver.ChromeOptions()
+    options.binary_location = "/usr/bin/chromium"  # Explicitly set Chromium binary path
     options.add_argument("--headless")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
     options.add_argument("--window-size=1920,1080")
     options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-    service = Service(ChromeDriverManager().install())
+    
+    # Point directly to the system installed chromedriver
+    service = Service("/usr/bin/chromedriver")
+    
     return webdriver.Chrome(service=service, options=options)
 
 # ================= STOCK CHECKER =================
@@ -125,12 +129,16 @@ def check_stock_details(driver, url):
 
 # ================= MAIN BOT LOOP =================
 def run_bot():
-    print("🚀 Men's Bot Started...")
+    print("🚀 Men's Bot Started (Chromium System Mode)...")
     seen = []
-    driver = get_driver()
-    
+    driver = None
+
     while True:
         try:
+            if driver is None:
+                driver = get_driver()
+                print("✅ Driver started.")
+
             driver.get(TARGET_URL)
             for _ in range(SCROLL_DEPTH):
                 driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
@@ -139,6 +147,7 @@ def run_bot():
             soup = BeautifulSoup(driver.page_source, 'html.parser')
             all_links = soup.find_all('a', href=True)
             
+            new_count = 0
             for link in all_links:
                 href = link['href']
                 if ('-p-' in href or '/p/' in href) and len(link.get_text(strip=True)) > 2:
@@ -184,23 +193,23 @@ def run_bot():
                     
                     send_alert({"title": title, "price": price, "link": full_link, "img": img_url, "sizes": sizes, "qty_msg": qty})
                     seen.append(p_id)
+                    new_count += 1
 
             if len(seen) > 200: seen = seen[-100:] # Keep memory low
+            if new_count > 0: print(f"Sent {new_count} updates.")
+            else: print(".", end="", flush=True)
 
         except Exception as e:
             print(f"Error: {e}")
             try: 
-                driver.quit()
-                driver = get_driver()
+                if driver: driver.quit()
             except: pass
+            driver = None # Force restart
             
         time.sleep(CHECK_INTERVAL)
 
 if __name__ == "__main__":
-    # 1. Start the fake web server in a separate thread
     t = threading.Thread(target=run_web_server)
     t.daemon = True
     t.start()
-
-    # 2. Start the Bot
     run_bot()
